@@ -1,13 +1,37 @@
 {
-  "title": "The Great Gatsby",
-  "author": "F. Scott Fitzgerald",
-  "year": 1925,
-  "genres": ["Fiction", "Classic", "Literary"],
-  "available": true,
-  "details": {
-    "pages": 180,
-    "language": "English",
-    "isbn": "978-0-7432-7356-5"
+  "books": [
+    {
+      "id": 1,
+      "title": "Python Network Programming",
+      "author": "John Smith",
+      "year": 2023,
+      "isbn": "978-1234567890",
+      "description": "A comprehensive guide to network programming in Python",
+      "available": true
+    },
+    {
+      "id": 2,
+      "title": "HTTP Protocol Deep Dive",
+      "author": "Jane Doe",
+      "year": 2022,
+      "isbn": "978-0987654321",
+      "description": "Understanding the HTTP protocol from basics to advanced",
+      "available": true
+    },
+    {
+      "id": 3,
+      "title": "Socket Programming Mastery",
+      "author": "Bob Johnson",
+      "year": 2024,
+      "isbn": "978-1122334455",
+      "description": "Master socket programming with practical examples",
+      "available": false
+    }
+  ],
+  "metadata": {
+    "total_books": 3,
+    "last_updated": "2024-01-01",
+    "version": "1.0"
   }
 }
-  
+
