@@ -1,401 +1,474 @@
 import socket
-# import time
+import os
+import mimetypes
+import json
+from datetime import datetime
+import threading
 
 # Define the host and port
 SERVER_HOST = '0.0.0.0'
 SERVER_PORT = 8080
 
+# Configuration for server behavior
+MAX_CONNECTIONS = 10  # Increased from 5 for better load handling
+BUFFER_SIZE = 8192  # Increased from 1500 for better performance
+REQUEST_TIMEOUT = 30  # Timeout in seconds for client requests
+
+# Initialize MIME types - this helps us serve files with correct content types
+# MIME types tell the browser what kind of content it's receiving
+mimetypes.init()
+
+# ---------- LOGGING UTILITY ----------
+# It's crucial to log server activity for debugging and monitoring
+# We'll create a simple logger that writes to both console and file
+class ServerLogger:
+    def __init__(self, log_file='server.log'):
+        self.log_file = log_file
+    
+    def log(self, message, level='INFO'):
+        """
+        Logs messages with timestamp and level.
+        Level can be: INFO, WARNING, ERROR, DEBUG
+        """
+        timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        log_message = f'[{timestamp}] [{level}] {message}'
+        print(log_message)
+        
+        # Write to log file for persistence
+        try:
+            with open(self.log_file, 'a', encoding='utf-8') as f:
+                f.write(log_message + '\n')
+        except Exception as e:
+            print(f'Failed to write to log file: {e}')
+
+logger = ServerLogger()
+
 # ---------- CREATE SOCKET ----------
-# The first step is to create and initialise our socket. What is a socket?
-# A socket is an endpoint in a network communication system. They are 
-# the most important tool in creating our own server as they allow for 
-# data to be sent and received over the network. They facilitate the 
-# connection between the client and the server and enable the server 
-# to handle multiple client connections simultaneously. Without sockets, 
-# the data communication needed for the operation of a server would not 
-# be possible. 
-# You might be thinking, what's http then? HTTP, short for Hyper Text Transfer Protocol,
-# is the protocol that's being used when data is sent or received through 
-# the sockets. Keep this in mind as it'll be useful when we write our own HTTP
-# response.
-
-# socket.socket() -> initializes a new socket.
-
-# The first argument we want to pass in is AddressFamily. For this,
-# we will pass in an IP.
-# You might ask, what is an IP?
-# Internet Protocol (IP) are rules for routing or sending packets of 
-# data across networks between devices. Basically, when data or information 
-# travels over the Internet or web, it travels in small packets. 
-# IP addresses ensure that devices like computers, servers etc.
-# route those data packets to the correct place.
-
-# socket.AF_INET specifies the Internet Protocol v4 addresses, the first 
-# stable version of IP and also the most used protocol. You could use v6
-# addresses, the newer version if you want. If you're wondering the main
-# reason why ipv6 came out, it is because ipv4 could generate 
-# around 4 billion addresses and the number of devices were exceeding.
-# ipv6 supports around three hundred forty quindecillion addresses.
-# Ofcourse, there are other improvements in performance but the number
-# of addresses supported were the biggest problem that led to ipv6.
-
-# socket.SOCK_STREAM means it is a TCP socket. TCP establishes 
-# a connection between the sender and receiver and ensures that the 
-# data, once it arrives, is complete, in order, and error-free.
-# This connection is established using a handshake process in 3 steps (open up the image):
-# 1. SYN (Synchronize): The client wants to establish a connection with 
-# the server, so it sends a packet with the SYN (synchronize) flag set 
-# to the server. This packet includes a sequence number, which is a 
-# random number that initiates the sequence numbers for the data 
-# packets that the client will send.
-# 2. SYN-ACK (Synchronize-Acknowledgment): Upon receiving the SYN packet, 
-# the server responds with a SYN-ACK packet. This packet acknowledges 
-# the client's SYN packet (using the ACK flag) and includes the 
-# server's own sequence number for the data packets it will send 
-# to the client.
-# 3. ACK (Acknowledgment): The client receives the server's SYN-ACK
-# packet and responds with an ACK packet. This packet acknowledges 
-# the server's SYN packet. At this point, the handshake is complete, 
-# and both the client and server have established a reliable connection. 
-# They can now start exchanging data. 
-# If you have difficulty understanding this process, think of it this way - someone knocks at your door, 
-# you open the door, then they say HI and your communication begins. 
-
-# Instead of using SOCK_STREAM, you can use SOCK_DGRAM which specifies
-# socket to use the UDP socket.
-# UDP stands for User Datagram Protocol. UDP sends packets, 
-# called datagrams, directly to the recipient without verifying 
-# whether the recipient is ready to receive or not.
-# So, at first glance UDP and TCP might seem like the same thing
-# but they're actually quite different. 
-# TCP ensures reliable transmission through error checking, 
-# retransmissions when the packets are corrupted and congestion 
-# control to reduce traffic load, meaning if the network condition
-# is bad, it will alter the rate of transfer of data. Because of 
-# this, TCP is used where reliability and data integrity are 
-# critical, such as web browsing (HTTP/HTTPS) and email (SMTP, IMAP/POP3). 
-# UDP doesn’t do all of this. It does not establish a connection/handshake before sending data. 
-# It sends packets without verifying whether the recipient is ready to receive. 
-# The benefit of this is that, UDP is faster than TCP as it doesn’t have
-# to do error checking. The tradeoff is there’s no guarantee that the packets 
-# will arrive in order, or in fact even arrive. This is why UDP is 
-# generally used in applications such as live video or audio streaming, 
-# online games, and broadcasting services.
+# Create a TCP/IP socket
 server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-# server_socket.setblocking(False)
-# After creating the socket, we can add optional settings to change
-# the default behaviour of sockets.
-# the first thing setsockopt takes in is -> level, meaning 
-# the protocol level for which the configuration is happening in.
-# For socket-level options, use socket.SOL_SOCKET. For TCP options, 
-# can use socket.IPPROTO_TCP
-# Next, we need to pass in the option name, meaning the feature we
-# need to enable. We will use SO_REUSEADDR. SO stands for
-# socket and REUSEADDR means Reuseaddress. This specific option tells the 
-# kernel to allow this endpoint (IP address and port) to be 
-# reused immediately after the socket is closed. Normally, there is 
-# a delay before an endpoint can be reused, to ensure that any 
-# delayed packets in the network are not mistakenly delivered to 
-# the wrong application.
-# finally, we pass in the value which is usually either 1 or 0; 1
-# means on and 0 means off.
-# Simply, this line allows the server socket to reuse a 
-# local address immediately after the socket is closed, 
-# instead of waiting for the default timeout.
+
+# Enable reusing the same address/port even if previous instance didn't release it yet
 server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 
-# Till now, with our 2 lines, great progress btw, we have created
-# and initialised a socket along with an option to improve
-# performance. Next, we need to connect, or more specifically bind 
-# our socket to our computer to tell it where our server should listen 
-# for incoming network requests. This is done using the IP Address
-# and port. What is an IP Address? Just a bunch of unique numbers 
-# and letters that identifies and locates a device on a network.
-# We can access each and every website through an IP address,
-# for example google website can be reached by typing 142.250.189.206 (show it)
-# DNS or the Domain Name System is used to map a proper string to this
-# IP Address so that we, humans type only google.com to reach the website
-# instead of a confusing number.
-# Now what is a port? Basically, port helps differentiate 
-# between multiple services running on the same computer. 
-# It allows computers and servers to route the incoming network 
-# traffic to the correct application or service. 
-# For example, web servers usually listen on port 80 for HTTP traffic 
-# and port 443 for HTTPS traffic. By using different port numbers, 
-# a single server can host multiple services, each listening on its
-# unique port, ensuring that all the http calls go to port 80 and
-# https go to 443. Think of this way - If an IP address is like a 
-# company's phone number, then a port number is like an extension.
-# Since, we want this server to be accessible from any device, we can
-# pass in 0.0.0.0. If you only want this computer to access the
-# server, you can pass 127.0.0.1.
-# For port, you can pass in any number in the range 0-65535 but remember, that Ports 
-# 0-1023 are reserved for the operating system's use so don't use that.
-# You won't get any error but your web server will not show up.
-# I'll pass 8080 because it is similar to 80 and as i said 
-# before, web servers typically listen on port 80 for HTTP request
-server_socket.bind((SERVER_HOST, SERVER_PORT))
+# Set socket timeout to prevent indefinite blocking
+# This ensures that if a client hangs, our server doesn't freeze
+server_socket.settimeout(REQUEST_TIMEOUT)
 
-# The final step in socket creation is making socket listen to 
-# the incoming connection requests using server_socket.listen().
-# How this works internally is that the operating system takes
-# note that this particular socket is now ready to accept incoming 
-# connections. It creates a queue for these connections, handling 
-# the initial handshake required. To specify, the size of this
-# queue, we can pass the backlog value to the listen function
-# To be clearer, the backlog parameter tells the maximum 
-# number of fully established connections that can wait in the queue.
-# But wait, what if the queue is full, what will happen to the new connection request?
-# The new connection will either be refused or ignored (depending on the operating 
-# system and its configuration), causing the client to retry later.
-server_socket.listen(5)
+# Bind the socket to the address and port
+try:
+    server_socket.bind((SERVER_HOST, SERVER_PORT))
+except OSError as e:
+    logger.log(f'Failed to bind to {SERVER_HOST}:{SERVER_PORT}. Error: {e}', 'ERROR')
+    logger.log(f'Make sure the port {SERVER_PORT} is not already in use.', 'ERROR')
+    exit(1)
 
-print(f'Listening on port {SERVER_PORT} ...') # if all goes well, we will print that we have started listening on a specific port
+# Enable the server to accept connections (max 10 clients in waiting queue)
+server_socket.listen(MAX_CONNECTIONS)
 
-while True: # so that we continuously keep listening to new client connections
-    
-    # Now, remember that our new connections get piled up in the queue? 
-    # How do I take the front element of that queue? Using server_socket.accept()
-    # This will give us a tuple with the socket and address of the client.
-    # The socket object is specifically for communication with the newly accepted connection, 
-    # don't confuse it with the server socket. The listening socket will continue to 
-    # listen for other incoming connections, while the new socket is used to send 
-    # and receive data on the connection just accepted. The address we receive 
-    # is again a tuple of (host, port), where the host client's IP address
-    # and port is the port used by client's machine for the connection.
-    # By the way, what do you think will happen if there are no connections in the queue?
-    # accept() will block the code until a connection becomes available (unless the socket 
-    # is configured to be non-blocking). You can set it to be non blocking by doing
-    # server_socket.setblocking(False) on top of the file (do it, get an error)
-    # The error comes in because we told the socket to never block the execution
-    # and when it tried to get a connection request from queue, the queue was empty
-    # To resolve this, we can use the try..except block and catch the BlockingIOError
-    # An important thing to mention is that BlockingIOError isn't just given
-    # when we call the accept function, it can also be thrown when we send or
-    # receive the HTTP request.
-    # I'll be using the blocked version for the rest of the tutorial but
-    # feel free to follow along with non blocked version.
-    
-    # try:
-    print('ran') # <----- add print statement to explain the blocking
-    client_socket, client_address = server_socket.accept()
-    print('ran2')  # <----- add print statement to explain the blocking
-    # except BlockingIOError:
-    #     time.sleep(1)
-    #     continue
+logger.log(f'Server successfully started on {SERVER_HOST}:{SERVER_PORT}', 'INFO')
+logger.log(f'Maximum connections in queue: {MAX_CONNECTIONS}', 'INFO')
+logger.log(f'Waiting for connections...', 'INFO')
 
-    # Next, we need to get the data or in our case, the http request from the client so that we can give
-    # an appropriate response. To do that, we use the client_socket and call
-    # the recv function on it. We can specify the maximum amount of data 
-    # we can handle in bytes. The most widely used networks limit packets 
-    # to approximately 1500 bytes so we can pass in something like that.
-    # The recv function returns bytes, obviously something we can't understand
-    # So, we can convert it to string using the decode function.
-    request = client_socket.recv(1500).decode()
-    print(request)
+# ---------- HELPER FUNCTIONS ----------
+def get_content_type(file_path):
+    """
+    Determines the MIME type of a file based on its extension.
+    This is essential for the browser to correctly interpret the file.
+    For example, .html files should be served as text/html,
+    .json as application/json, .css as text/css, etc.
+    """
+    content_type, _ = mimetypes.guess_type(file_path)
+    # Default to plain text if type cannot be determined
+    return content_type or 'text/plain'
 
-    # This request is composed of a request line, headers, and 
-    # an optional message body.
-    
-    # The first line of the http request is the request line.
-    # It contains 3 elements - the http method, in our case it is 
-    # GET but it can also be POST, UPDATE, DELETE, HEAD & OPTIONS.
-    # GET, as the name suggests, tells/implies that some 
-    # resource should be fetched. POST suggests that some data is 
-    # created and pushed to the server. UPDATE and DELETE mean what
-    # the name suggests. HEAD is similar to the **`GET`** method, 
-    # except that it requests the server to respond with the headers 
-    # only and not the actual body of the response. Where is that useful?
-    # If a URL produces a large download, a `HEAD` request could read its 
-    # Content-Length header to check the filesize without actually downloading the 
-    # file. OPTIONS list out the HTTP methods and other options supported by 
-    # a web server without performing any action or transferring a 
-    # resource's data. The next part of the first line is usually 
-    # the URL but in our case, the path is mentioned, meaning what route of the 
-    # site is called. For example, if I go to YouTube.com/@RivaanRanawat, /@RivaanRanawat 
-    # is the path. So, in our case since we just passed localhost:8080, it went 
-    # to /, the default home path for most websites. I’m not going into 
-    # much detail for this, you can look at this structure to understand more 
-    # about URL if you want to. (insert image)
-
-    # The final part of the first line is the HTTP version that was used to send 
-    # this request. It is 1.1 but there are various versions of http - 0.9, the 
-    # first official version, 1.0, 1.1, 2 and 3. This versioning might 
-    # not seem important but it is actually pretty important! The http 
-    # version used here determines the structure of the rest of this 
-    # http request. In version 0.9, request only specified the first 
-    # two parts of the first line - http method and the path. What about 
-    # the version? It was the first version so ofcourse the concept of http 
-    # versions didn’t exist back then. The response was simply an HTML 
-    # file, no other type of file or message could be sent. In version 
-    # 1.0, version was added to the first line, headers were attached 
-    # in both requests and responses, more about that in some time. 
-    # Things like status code and the ability to send files other than 
-    # just HTML were also added to the response. The biggest problem with 
-    # version 1.0 was Interoperability, meaning different browsers and
-    # servers communicating with each other. Why did this issue exist? 
-    # That’s because many people tried to improve the 1.0 version by 
-    # adding new features, that’s good but there wasn't a good way to
-    # make sure all browsers and servers understood these new features. 
-    # Imagine the issue if I talk to you in English and suddenly say 
-    # some important information in Hindi. All of this was fixed in 
-    # the 1.1 version, the first standardised protocol. Along with 
-    # this, multiple new things were added like cache control, pipelining
-    # meaning the ability to send a second request before the first one 
-    # is completed. In prior versions, a new TCP connection was created 
-    # for each http call. As you can imagine, this was inefficient as a 
-    # web page generally required multiple resources such as images, 
-    # scripts, and stylesheets. The overhead of establishing and tearing 
-    # down TCP connections for each resource increased the page load 
-    # times and put more load on the servers. In 1.1, a connection can 
-    # be/is reused. We will understand how this connection can be reused
-    # in a couple of minutes. HTTP 2 was introduced 15 years later which 
-    # focused on improving the performance. HTTP 3 was soon introduced 
-    # which focused on changing TCP to QUIC, short for Quick UDP Internet 
-    # Connection. You can think of QUIC as a protocol built on top of 
-    # UDP providing the reliability and ordering of TCP but with reduced 
-    # latency and improved performance. How does this happen? **Remember, 
-    # TCP** requires a three-way handshake to establish a connection? This
-    # adds latency. Additionally, if encryption is done (as in HTTPS), 
-    # there is an additional handshake process. **QUIC** combines the 
-    # connection and security handshakes, reducing the initial setup time.
-    # How is performance improved? We know **TCP** connections are identified 
-    # by IP addresses and port numbers, we did that in our code too. But 
-    # what if a user's IP address changes (like when switching from Wi-Fi
-    # to mobile data)? Then the TCP connection must be reestablished. 
-    # In QUIC, connections are identified by connection IDs rather than 
-    # IP addresses so it doesn’t matter if the network or IP changes.
-    # All this information is good but the main question is Why are we 
-    # getting HTTP 1.1 request, not HTTP 2 or 3? Simple, we have created a
-    # basic server that depends on TCP because of which HTTP 3 isn’t used. 
-    # In order to run HTTP 3 server, we need to depend on QUIC. To use 
-    # HTTP 2, we need to implement some other protocols that allow 
-    # features like multiplexing, the ability to run multiple requests 
-    # at once. The interesting thing we notice here is the ability of 
-    # browsers to use http 1.1 to send a request if the server it is 
-    # interacting with, doesn’t use http 2/3. Alright, enough about 
-    # the first line, I promise we’ll go over the next lines quicker. 
-    # To remind you, the lines and structure we will see next are 
-    # only present in HTTP 1.1.
-
-    # The next line, Host: [localhost:8080](http://localhost:8080)
-    # specifies the domain name and if you use IP address, that along 
-    # with the port of the server from which the resource was requested.
-    # The next line, Connection: keep-alive tells the server that the 
-    # client wants to keep the connection open for further requests 
-    # rather than closing it right after this request is fulfilled.
-    # Remember, I had told in 1.1, a connection can be/is reused.
-    # If this line says keep-alive, the connection is reused
-    # User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)
-    # AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36: 
-    # This line provides detailed information about the client's browser,
-    # operating system, and rendering engine.
-    # sec-ch-ua-platform: "macOS": This line specifies the operating 
-    # system the browser is running on.
-    # Accept: image/avif,image/webp,image/apng,image/svg+xml,image/,*/;q=0.8: 
-    # This header specifies the media types that the client can process,
-    # prioritized from left to right. The **`q`** parameter indicates 
-    # the quality factor for each type.
-    # Sec-Fetch-Site: same-origin: lets us know if the request is being 
-    # made from the same origin as the destination.
-    # Sec-Fetch-Mode: no-cors: Specifies the mode for how the request 
-    # should be made regarding CORS (Cross-Origin Resource Sharing) 
-    # policies. What is CORS? A security mechanism implemented by 
-    # web browsers to protect users from certain types of cyber attacks, 
-    # like cross-site request forgery. What on earth does that mean? 
-    # Let’s use an analogy. 
-    # Imagine you have a blog hosted at `www.myawesomeblog.com`, and 
-    # you want to embed a YouTube video within one of your blog posts.
-    # The same-origin policy is a security measure implemented in
-    # web browsers. It ensures that scripts running on pages from
-    # your blog can only request data from `www.myawesomeblog.com`
-    # and not from other sites directly, like `www.youtube.com`. 
-    # This rule helps protect your blog's visitors from potential 
-    # malicious scripts and data theft. What do you do in that case, 
-    # you still want to display YouTube videos? Enter CORS 
-    # (Cross-Origin Resource Sharing), a mechanism that allows 
-    # restricted resources on a web page to be requested from another 
-    # domain outside the domain from which the first resource was served. 
-    # So, if YouTube sets up its servers to include specific CORS headers
-    # in responses, it can allow your blog to embed its videos. 
-    # Essentially, YouTube is telling the browser, "It's safe to 
-    # display our videos on `www.myawesomeblog.com`". So, 
-    # behind the scenes, when you embed a YouTube video on your blog, your 
-    # blog's page makes a request to `www.youtube.com` to fetch the video. 
-    # YouTube's servers respond with the video along with headers that say, 
-    # "We permit `www.myawesomeblog.com` to display this content." The 
-    # browser checks these permissions (the CORS headers) and decides 
-    # it's okay to show the YouTube video on your blog. Understood, 
-    # but what is the no-cors that's mentioned? The "no-cors" mode is 
-    # generally used when you don't need to read the content from 
-    # the other site but just need to include it or refer to it.
-    # Sec-Fetch-Dest: navigate - tells the type of content the client 
-    # expects to receive as a response - in our case, the request is 
-    # to navigate the browser to a new document.
-    # Referer: http://localhost:8080/ - tells the address of the web 
-    # page that initiated the request. 
-    # Accept-Encoding: gzip, deflate, br, zstd - Tells the server 
-    # which encoding algorithms the client can understand for 
-    # compressing the response. This supports gzip, deflate, 
-    # Brotli (br), and Zstandard (zstd).
-    # Accept-Language: en-IN,en-GB;q=0.9,en-US;q=0.8,en;q=0.7: 
-    # Specifies the client's preferred languages, ordered by preference
-    # using **`q`** values. In my case, English as used in India is
-    # preferred, followed by British English, American English, and
-    # then any other type of English.
-    # All of these were headers.
-
-    # The third thing in this request is an optional message body. 
-    # You might wonder there's no optional message body? And that's
-    # right. No message body is present in GET requests. However,
-    # if it was a post request, we would have a message body.
-    # Let me show it to you! (Notice one line is left between
-    # headers and the message body)
-
-    # That’s all about HTTP request format! This was very important
-    # to understand as based on the request, we can frame our response
-    # and this is going to be a piece of cake!
-
-    # Returns HTTP response
-    headers = request.split('\n')
-    first_header_components = headers[0].split()
-
-    http_method = first_header_components[0]
-    path = first_header_components[1]
-
-    if http_method == 'GET':
-        if path == '/':
-            fin = open('index.html')
-        elif path == '/book':
-            fin = open('book.json')
-        else:
-            # handle the edge case
-            pass
+def read_file_safely(file_path):
+    """
+    Safely reads a file with proper error handling.
+    Returns tuple: (success: bool, content: str/bytes, error_message: str)
+    """
+    try:
+        # Check if file exists first
+        if not os.path.exists(file_path):
+            return False, None, f'File not found: {file_path}'
         
-        content = fin.read()
-        fin.close()
-        response = 'HTTP/1.1 200 OK\n\n' + content
+        # Determine if file should be read as binary or text
+        # Images, videos, PDFs etc should be binary
+        content_type = get_content_type(file_path)
+        is_binary = not content_type.startswith('text') and content_type != 'application/json'
+        
+        mode = 'rb' if is_binary else 'r'
+        encoding = None if is_binary else 'utf-8'
+        
+        with open(file_path, mode, encoding=encoding) as f:
+            content = f.read()
+        
+        return True, content, None
+        
+    except PermissionError:
+        return False, None, f'Permission denied: {file_path}'
+    except Exception as e:
+        return False, None, f'Error reading file: {str(e)}'
+
+def build_response(status_code, status_text, content='', content_type='text/html', extra_headers=None):
+    """
+    Builds a complete HTTP response with proper headers.
+    This is a cleaner way to construct responses than string concatenation.
+    
+    Parameters:
+    - status_code: HTTP status code (200, 404, 500, etc.)
+    - status_text: Status message (OK, Not Found, etc.)
+    - content: Response body content
+    - content_type: MIME type of the content
+    - extra_headers: Dictionary of additional headers to include
+    """
+    # Start with status line
+    response = f'HTTP/1.1 {status_code} {status_text}\r\n'
+    
+    # Add standard headers
+    headers = {
+        'Server': 'Own-Web-Server/1.0',
+        'Date': datetime.utcnow().strftime('%a, %d %b %Y %H:%M:%S GMT'),
+        'Content-Type': content_type,
+        'Content-Length': len(content) if isinstance(content, bytes) else len(content.encode('utf-8')),
+        'Connection': 'close'  # We close after each request for simplicity
+    }
+    
+    # Add any extra headers provided
+    if extra_headers:
+        headers.update(extra_headers)
+    
+    # Build header section
+    for key, value in headers.items():
+        response += f'{key}: {value}\r\n'
+    
+    # Empty line separates headers from body (REQUIRED by HTTP spec)
+    response += '\r\n'
+    
+    # Return response as bytes if content is binary, otherwise encode
+    if isinstance(content, bytes):
+        return response.encode('utf-8') + content
     else:
-        response = 'HTTP/1.1 405 Method Not Allowed\n\nAllow: GET'
+        return (response + content).encode('utf-8')
 
-    # You have the response created, you only want to send it back to
-    # the client. To do that, there are multiple functions on client_socket
-    # We'll be using sendall so that all the data is sent to the client.
-    # sendall accepts ReadableBuffer but we have a response in string format
-    # what do we do? we will encode the response so that it's converted
-    # into bytes.
-    # We could have also used the send function but the problem with it
-    # is that there's no guarantee send() will send all the data in one
-    # call, especially if the message is large or the network is busy.
-    # sendall on the other hand continues sending data from the buffer 
-    # until either all data has been sent or an error occurs. 
-    # basically, sendall handles the re-sending of data that was not 
-    # successfully sent in one go.
-    client_socket.sendall(response.encode())
+def create_error_page(status_code, status_text, message):
+    """
+    Creates a user-friendly HTML error page instead of plain text.
+    This provides better UX when errors occur.
+    """
+    html = f'''<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{status_code} - {status_text}</title>
+    <style>
+        body {{
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            margin: 0;
+            color: #333;
+        }}
+        .error-container {{
+            background: white;
+            padding: 3rem;
+            border-radius: 15px;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.3);
+            text-align: center;
+            max-width: 500px;
+        }}
+        .error-code {{
+            font-size: 5rem;
+            font-weight: bold;
+            color: #667eea;
+            margin: 0;
+        }}
+        .error-text {{
+            font-size: 1.5rem;
+            color: #666;
+            margin: 1rem 0;
+        }}
+        .error-message {{
+            color: #888;
+            margin: 1rem 0;
+        }}
+        .back-button {{
+            display: inline-block;
+            margin-top: 2rem;
+            padding: 0.8rem 2rem;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            text-decoration: none;
+            border-radius: 25px;
+            transition: transform 0.3s;
+        }}
+        .back-button:hover {{
+            transform: translateY(-2px);
+        }}
+    </style>
+</head>
+<body>
+    <div class="error-container">
+        <h1 class="error-code">{status_code}</h1>
+        <h2 class="error-text">{status_text}</h2>
+        <p class="error-message">{message}</p>
+        <a href="/" class="back-button">← Back to Home</a>
+    </div>
+</body>
+</html>'''
+    return html
 
-    # Close connection - show what happens if the client socket
-    # is not closed.
-    client_socket.close()
+def parse_request(request_data):
+    """
+    Parses HTTP request and extracts key information.
+    Returns a dictionary with method, path, headers, and body.
+    This centralizes request parsing and makes it reusable.
+    """
+    try:
+        # Split request into lines
+        lines = request_data.split('\r\n')
+        if not lines or not lines[0]:
+            return None
+        
+        # Parse request line (first line)
+        request_line_parts = lines[0].split()
+        if len(request_line_parts) < 2:
+            return None
+        
+        method = request_line_parts[0]
+        path = request_line_parts[1]
+        http_version = request_line_parts[2] if len(request_line_parts) > 2 else 'HTTP/1.1'
+        
+        # Parse headers
+        headers = {}
+        body_start = 0
+        for i, line in enumerate(lines[1:], 1):
+            if line == '':
+                body_start = i + 1
+                break
+            if ':' in line:
+                key, value = line.split(':', 1)
+                headers[key.strip().lower()] = value.strip()
+        
+        # Get body if present
+        body = '\r\n'.join(lines[body_start:]) if body_start > 0 else ''
+        
+        return {
+            'method': method,
+            'path': path,
+            'http_version': http_version,
+            'headers': headers,
+            'body': body
+        }
+    except Exception as e:
+        logger.log(f'Error parsing request: {e}', 'ERROR')
+        return None
 
-# Close socket
-server_socket.close()
+def handle_client(client_socket, client_address):
+    """
+    Handles individual client connection in a separate thread.
+    This allows the server to handle multiple clients simultaneously.
+    Each client gets their own thread, preventing one slow client
+    from blocking others.
+    """
+    logger.log(f'New connection from {client_address[0]}:{client_address[1]}', 'INFO')
+    
+    try:
+        # Set timeout for this specific client socket
+        client_socket.settimeout(REQUEST_TIMEOUT)
+        
+        # Receive request data - using larger buffer for better performance
+        request_data = client_socket.recv(BUFFER_SIZE).decode('utf-8')
+        
+        if not request_data:
+            logger.log(f'Empty request from {client_address[0]}', 'WARNING')
+            return
+        
+        # Parse the request
+        request = parse_request(request_data)
+        if not request:
+            error_html = create_error_page(400, 'Bad Request', 'The request could not be understood by the server.')
+            response = build_response(400, 'Bad Request', error_html)
+            client_socket.sendall(response)
+            return
+        
+        logger.log(f'{request["method"]} {request["path"]} from {client_address[0]}', 'INFO')
+        
+        # Handle different HTTP methods
+        if request['method'] == 'GET':
+            handle_get_request(client_socket, request['path'])
+        elif request['method'] == 'POST':
+            handle_post_request(client_socket, request['path'], request['body'])
+        elif request['method'] == 'HEAD':
+            # HEAD is like GET but only returns headers, no body
+            handle_head_request(client_socket, request['path'])
+        else:
+            # Method not allowed
+            error_html = create_error_page(405, 'Method Not Allowed', 
+                                          f'The {request["method"]} method is not supported for this resource.')
+            response = build_response(405, 'Method Not Allowed', error_html, 
+                                     extra_headers={'Allow': 'GET, POST, HEAD'})
+            client_socket.sendall(response)
+            logger.log(f'Method {request["method"]} not allowed for {request["path"]}', 'WARNING')
+    
+    except socket.timeout:
+        logger.log(f'Request timeout from {client_address[0]}', 'WARNING')
+        error_html = create_error_page(408, 'Request Timeout', 'The server timed out waiting for the request.')
+        response = build_response(408, 'Request Timeout', error_html)
+        try:
+            client_socket.sendall(response)
+        except:
+            pass
+    
+    except Exception as e:
+        logger.log(f'Error handling client {client_address[0]}: {e}', 'ERROR')
+        error_html = create_error_page(500, 'Internal Server Error', 'An unexpected error occurred on the server.')
+        response = build_response(500, 'Internal Server Error', error_html)
+        try:
+            client_socket.sendall(response)
+        except:
+            pass
+    
+    finally:
+        # Always close the client socket to free resources
+        try:
+            client_socket.close()
+            logger.log(f'Connection closed for {client_address[0]}', 'DEBUG')
+        except:
+            pass
+
+def handle_get_request(client_socket, path):
+    """
+    Handles GET requests by serving files from the workspace.
+    This is the most common HTTP method used by browsers.
+    """
+    # Remove query parameters if present (everything after ?)
+    path = path.split('?')[0]
+    
+    # Route mapping - maps URL paths to files
+    route_map = {
+        '/': 'index.html',
+        '/book': 'book.json',
+        '/book.json': 'book.json'
+    }
+    
+    # Get the file to serve
+    if path in route_map:
+        file_path = route_map[path]
+    else:
+        # Try to serve the file directly if it exists in the workspace
+        # Remove leading slash and prevent directory traversal attacks
+        file_path = path.lstrip('/').replace('..', '')
+    
+    # Read the file
+    success, content, error = read_file_safely(file_path)
+    
+    if success:
+        content_type = get_content_type(file_path)
+        response = build_response(200, 'OK', content, content_type)
+        client_socket.sendall(response)
+        logger.log(f'Served {file_path} ({content_type})', 'INFO')
+    else:
+        # File not found or error reading
+        error_html = create_error_page(404, 'Not Found', f'The requested resource "{path}" was not found on this server.')
+        response = build_response(404, 'Not Found', error_html)
+        client_socket.sendall(response)
+        logger.log(f'404 - {path} not found: {error}', 'WARNING')
+
+def handle_post_request(client_socket, path, body):
+    """
+    Handles POST requests. This is useful for form submissions,
+    API calls, and data uploads. Currently implements a simple
+    echo endpoint for demonstration.
+    """
+    if path == '/api/echo':
+        # Echo endpoint - returns the data sent to it
+        try:
+            # Try to parse as JSON
+            data = json.loads(body) if body else {}
+            response_data = {
+                'success': True,
+                'message': 'Data received successfully',
+                'received': data,
+                'timestamp': datetime.now().isoformat()
+            }
+            response_json = json.dumps(response_data, indent=2)
+            response = build_response(200, 'OK', response_json, 'application/json')
+            client_socket.sendall(response)
+            logger.log(f'POST /api/echo - Data: {body[:100]}...', 'INFO')
+        except json.JSONDecodeError:
+            error_data = {'success': False, 'error': 'Invalid JSON'}
+            response = build_response(400, 'Bad Request', json.dumps(error_data), 'application/json')
+            client_socket.sendall(response)
+    else:
+        # Endpoint not found
+        error_html = create_error_page(404, 'Not Found', f'The API endpoint "{path}" does not exist.')
+        response = build_response(404, 'Not Found', error_html)
+        client_socket.sendall(response)
+
+def handle_head_request(client_socket, path):
+    """
+    Handles HEAD requests. Returns only headers without the body.
+    This is useful for checking if a resource exists or getting
+    metadata without downloading the entire file.
+    """
+    # Similar to GET but only send headers
+    path = path.split('?')[0]
+    route_map = {
+        '/': 'index.html',
+        '/book': 'book.json',
+        '/book.json': 'book.json'
+    }
+    
+    file_path = route_map.get(path, path.lstrip('/').replace('..', ''))
+    success, content, error = read_file_safely(file_path)
+    
+    if success:
+        content_type = get_content_type(file_path)
+        # Build response but with empty content
+        response = build_response(200, 'OK', '', content_type)
+        client_socket.sendall(response)
+        logger.log(f'HEAD {file_path}', 'INFO')
+    else:
+        response = build_response(404, 'Not Found', '')
+        client_socket.sendall(response)
+
+# ---------- MAIN SERVER LOOP ----------
+try:
+    while True:
+        try:
+            # Accept new connection
+            # This blocks until a connection is made or timeout occurs
+            client_socket, client_address = server_socket.accept()
+            
+            # Create a new thread to handle this client
+            # This allows us to handle multiple clients concurrently
+            # daemon=True means the thread will automatically close when main program exits
+            client_thread = threading.Thread(
+                target=handle_client,
+                args=(client_socket, client_address),
+                daemon=True
+            )
+            client_thread.start()
+            
+        except socket.timeout:
+            # This is normal - just means no connection was made in timeout period
+            # We continue the loop to accept more connections
+            continue
+            
+        except KeyboardInterrupt:
+            # User pressed Ctrl+C
+            logger.log('Keyboard interrupt received. Shutting down...', 'INFO')
+            break
+            
+except Exception as e:
+    logger.log(f'Fatal server error: {e}', 'ERROR')
+
+finally:
+    # Clean shutdown - close the server socket
+    logger.log('Closing server socket...', 'INFO')
+    server_socket.close()
+    logger.log('Server stopped.', 'INFO')
