@@ -1,5 +1,8 @@
+# improved version is main.py - not this. if you are planning to build it from scratch, use this then!
+
+
 import socket
-# import time
+# import time 
 
 # Define the host and port
 SERVER_HOST = '0.0.0.0'
